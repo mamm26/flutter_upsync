@@ -166,6 +166,7 @@ bool WritePowerShellScript(const std::wstring& script_path,
   content << L"$currentExe = '" << escaped_current << L"'\n";
   content << L"$installDir = Split-Path -Parent $currentExe\n";
   content << L"$extractRoot = $null\n";
+  content << L"$preservedRoot = $null\n";
   content << L"$pidToWait = " << current_pid << L"\n";
   content << L"while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) { "
              L"Start-Sleep -Milliseconds 500 }\n";
@@ -181,6 +182,40 @@ bool WritePowerShellScript(const std::wstring& script_path,
   content << L"    if ($entries.Count -eq 1 -and $entries[0].PSIsContainer) {\n";
   content << L"      $sourceDir = $entries[0].FullName\n";
   content << L"    }\n";
+  content << L"    if (Test-Path -LiteralPath $installDir) {\n";
+  content << L"      $preservedDirectories = @()\n";
+  content << L"      $dotItems = @(Get-ChildItem -LiteralPath $installDir -Force -Recurse | "
+             L"Where-Object { $_.Name.StartsWith('.') } | "
+             L"Sort-Object { $_.FullName.Length })\n";
+  content << L"      foreach ($item in $dotItems) {\n";
+  content << L"        $relativePath = $item.FullName.Substring($installDir.Length).TrimStart('\\')\n";
+  content << L"        if ([string]::IsNullOrWhiteSpace($relativePath)) { continue }\n";
+  content << L"        $sourcePath = Join-Path $sourceDir $relativePath\n";
+  content << L"        if (Test-Path -LiteralPath $sourcePath) { continue }\n";
+  content << L"        $skipItem = $false\n";
+  content << L"        foreach ($preservedDir in $preservedDirectories) {\n";
+  content << L"          if ($relativePath.StartsWith($preservedDir + '\\', [System.StringComparison]::OrdinalIgnoreCase)) {\n";
+  content << L"            $skipItem = $true\n";
+  content << L"            break\n";
+  content << L"          }\n";
+  content << L"        }\n";
+  content << L"        if ($skipItem) { continue }\n";
+  content << L"        if ($preservedRoot -eq $null) {\n";
+  content << L"          $preservedRoot = Join-Path ([System.IO.Path]::GetDirectoryName($package)) "
+             L"('preserve_' + [System.Guid]::NewGuid().ToString('N'))\n";
+  content << L"          New-Item -ItemType Directory -Path $preservedRoot -Force | Out-Null\n";
+  content << L"        }\n";
+  content << L"        $preservedPath = Join-Path $preservedRoot $relativePath\n";
+  content << L"        $preservedParent = Split-Path -Parent $preservedPath\n";
+  content << L"        if ($preservedParent) {\n";
+  content << L"          New-Item -ItemType Directory -Path $preservedParent -Force | Out-Null\n";
+  content << L"        }\n";
+  content << L"        Copy-Item -LiteralPath $item.FullName -Destination $preservedPath -Recurse -Force\n";
+  content << L"        if ($item.PSIsContainer) {\n";
+  content << L"          $preservedDirectories += $relativePath\n";
+  content << L"        }\n";
+  content << L"      }\n";
+  content << L"    }\n";
   content << L"    for ($i = 0; $i -lt 5; $i++) {\n";
   content << L"      & robocopy $sourceDir $installDir /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null\n";
   content << L"      $code = $LASTEXITCODE\n";
@@ -189,6 +224,11 @@ bool WritePowerShellScript(const std::wstring& script_path,
   content << L"    }\n";
   content << L"    if ($code -ge 8) {\n";
   content << L"      throw \"robocopy failed with exit code $code\"\n";
+  content << L"    }\n";
+  content << L"    if ($preservedRoot) {\n";
+  content << L"      Get-ChildItem -LiteralPath $preservedRoot -Force | ForEach-Object {\n";
+  content << L"        Copy-Item -LiteralPath $_.FullName -Destination $installDir -Recurse -Force\n";
+  content << L"      }\n";
   content << L"    }\n";
   content << L"  } elseif ($extension -eq '.exe') {\n";
   content << L"    Copy-Item -LiteralPath $package -Destination $currentExe -Force\n";
@@ -202,6 +242,9 @@ bool WritePowerShellScript(const std::wstring& script_path,
   content << L"  Remove-Item -LiteralPath $package -Force -ErrorAction SilentlyContinue\n";
   content << L"  if ($extractRoot) {\n";
   content << L"    Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue\n";
+  content << L"  }\n";
+  content << L"  if ($preservedRoot) {\n";
+  content << L"    Remove-Item -LiteralPath $preservedRoot -Recurse -Force -ErrorAction SilentlyContinue\n";
   content << L"  }\n";
   content << L"  Start-Sleep -Milliseconds 500\n";
   content << L"  Remove-Item -LiteralPath '" << escaped_script
