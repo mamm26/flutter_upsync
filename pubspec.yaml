@@ -1,6 +1,6 @@
 name: upsync
 description: "Plugin Flutter para descargar y aplicar actualizaciones de Windows en segundo plano."
-version: 0.0.1+2
+version: 0.0.1+3
 homepage: "https://github.com/mamm26/flutter_upsync"
 repository: https://github.com/mamm26/flutter_upsync
 issue_tracker: https://github.com/mamm26/flutter_upsync/issues
