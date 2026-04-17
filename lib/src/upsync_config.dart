@@ -1,4 +1,6 @@
+/// Configuración del actualizador para Windows.
 class UpsyncConfig {
+  /// Crea una configuración para consultar, descargar y aplicar actualizaciones.
   const UpsyncConfig({
     required this.manifestUrl,
     required this.currentVersion,
@@ -13,16 +15,24 @@ class UpsyncConfig {
   /// URL del manifest remoto.
   final String manifestUrl;
 
-  /// Version instalada para comparar contra el manifest.
+  /// Versión instalada para comparar contra el manifest.
   final String currentVersion;
 
-  /// Build instalada cuando el manifest tambien trae buildNumber.
+  /// Build instalada cuando el manifest también trae `buildNumber`.
   final int currentBuildNumber;
 
-  /// Nombre opcional para la carpeta local. Si va vacio, sale del exe.
+  /// Nombre opcional para la carpeta local. Si va vacío, sale del exe.
   final String appName;
+
+  /// Intervalo entre revisiones automáticas del manifiesto remoto.
   final Duration checkInterval;
+
+  /// Encabezados HTTP adicionales para las solicitudes del actualizador.
   final Map<String, String> requestHeaders;
+
+  /// Indica si la descarga debe iniciar automáticamente al detectar una actualización.
   final bool autoDownload;
+
+  /// Tiempo máximo para completar cada solicitud HTTP.
   final Duration requestTimeout;
 }

@@ -1,4 +1,6 @@
+/// Describe una versión disponible para descargar e instalar.
 class UpsyncManifest {
+  /// Crea una representación inmutable del manifiesto remoto.
   const UpsyncManifest({
     required this.version,
     required this.downloadUrl,
@@ -9,17 +11,32 @@ class UpsyncManifest {
     this.fileSizeBytes,
   });
 
+  /// Versión legible de la actualización.
   final String version;
+
+  /// Número de compilación usado como criterio adicional de comparación.
   final int buildNumber;
+
+  /// URL desde la que se descarga el paquete de actualización.
   final String downloadUrl;
+
+  /// Tipo explícito del paquete remoto, si el manifiesto lo informa.
   final String? packageType;
+
+  /// Hash SHA-256 esperado del archivo descargado.
   final String? sha256;
+
+  /// Notas o cambios relevantes de la versión.
   final String? notes;
+
+  /// Tamaño esperado del archivo en bytes.
   final int? fileSizeBytes;
 
+  /// Identificador estable de la versión, incluyendo build cuando existe.
   String get identifier =>
       buildNumber > 0 ? '$version+$buildNumber' : version;
 
+  /// Tipo de paquete resuelto a partir del manifiesto o de la URL.
   String get resolvedPackageType {
     final normalized = packageType?.trim().toLowerCase();
     if (normalized == 'zip' || normalized == 'exe') {
@@ -35,6 +52,7 @@ class UpsyncManifest {
     return 'exe';
   }
 
+  /// Construye una instancia a partir del JSON recibido desde el servidor.
   factory UpsyncManifest.fromJson(Map<String, dynamic> json) {
     final version = (json['version'] ?? json['versionName'] ?? '')
         .toString()
@@ -65,6 +83,7 @@ class UpsyncManifest {
     );
   }
 
+  /// Convierte la instancia al formato JSON persistido localmente.
   Map<String, dynamic> toJson() {
     return {
       'version': version,

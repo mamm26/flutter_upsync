@@ -70,13 +70,42 @@ enable_testing()
 include(FetchContent)
 FetchContent_Declare(
   googletest
-  URL https://github.com/google/googletest/archive/release-1.11.0.zip
+  URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.zip
 )
+FetchContent_GetProperties(googletest)
+if(NOT googletest_POPULATED)
+  FetchContent_Populate(googletest)
+endif()
+
+# Older googletest trees still use cmake_minimum_required(VERSION 2.8.12),
+# which emits deprecation warnings on recent CMake versions. Patch the
+# fetched sources in the build directory before adding the subdirectory.
+function(_upsync_patch_googletest_cmake FILE_PATH)
+  if(NOT EXISTS "${FILE_PATH}")
+    return()
+  endif()
+
+  file(READ "${FILE_PATH}" _upsync_file_content)
+  string(REGEX REPLACE
+    "cmake_minimum_required\\(VERSION 2\\.8\\.12\\)"
+    "cmake_minimum_required(VERSION 3.5...3.28)"
+    _upsync_patched_content
+    "${_upsync_file_content}"
+  )
+
+  if(NOT _upsync_file_content STREQUAL _upsync_patched_content)
+    file(WRITE "${FILE_PATH}" "${_upsync_patched_content}")
+  endif()
+endfunction()
+
+_upsync_patch_googletest_cmake("${googletest_SOURCE_DIR}/CMakeLists.txt")
+_upsync_patch_googletest_cmake("${googletest_SOURCE_DIR}/googlemock/CMakeLists.txt")
+_upsync_patch_googletest_cmake("${googletest_SOURCE_DIR}/googletest/CMakeLists.txt")
 # Prevent overriding the parent project's compiler/linker settings
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 # Disable install commands for gtest so it doesn't end up in the bundle.
 set(INSTALL_GTEST OFF CACHE BOOL "Disable installation of googletest" FORCE)
-FetchContent_MakeAvailable(googletest)
+add_subdirectory("${googletest_SOURCE_DIR}" "${googletest_BINARY_DIR}" EXCLUDE_FROM_ALL)
 
 # The plugin's C API is not very useful for unit testing, so build the sources
 # directly into the test binary rather than using the DLL.

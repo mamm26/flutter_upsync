@@ -13,9 +13,11 @@ import 'upsync_config.dart';
 import 'upsync_manifest.dart';
 import 'upsync_state.dart';
 
+/// Implementación de `Upsync` para entornos con `dart:io`.
 class Upsync {
   Upsync._();
 
+  /// Instancia singleton del actualizador.
   static final Upsync instance = Upsync._();
   static const MethodChannel _channel =
       MethodChannel('upsync/methods');
@@ -31,13 +33,16 @@ class Upsync {
   Future<UpsyncState>? _activeCheck;
   Future<void>? _activeDownload;
 
+  /// Flujo de cambios de estado del actualizador.
   Stream<UpsyncState> get states => _states.stream;
 
+  /// Último estado conocido del actualizador.
   UpsyncState get state => _state;
 
   bool get _isSupportedPlatform =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
 
+  /// Inicializa el actualizador, restaura descargas pendientes y agenda revisiones.
   Future<void> start(UpsyncConfig config) async {
     _config = config;
 
@@ -72,11 +77,13 @@ class Upsync {
     });
   }
 
+  /// Detiene las revisiones periódicas automáticas.
   Future<void> stop() async {
     _timer?.cancel();
     _timer = null;
   }
 
+  /// Ejecuta una comprobación inmediata del manifiesto remoto.
   Future<UpsyncState> checkNow() async {
     if (!_isSupportedPlatform) {
       return _state.copyWith(
@@ -96,6 +103,7 @@ class Upsync {
     return _activeCheck!;
   }
 
+  /// Intenta aplicar el paquete descargado y reiniciar la aplicación.
   Future<bool> applyDownloadedUpdateAndRestart() async {
     if (!_isSupportedPlatform || !_state.isReadyToInstall) {
       return false;
@@ -132,7 +140,6 @@ class Upsync {
 
       await Future<void>.delayed(const Duration(milliseconds: 150));
       exit(0);
-      return true;
     } catch (e) {
       _emit(_state.copyWith(
         status: UpsyncStatus.error,
@@ -143,6 +150,7 @@ class Upsync {
     }
   }
 
+  /// Elimina los metadatos y el archivo de una actualización pendiente.
   Future<void> clearPendingUpdate() async {
     if (!_isSupportedPlatform) {
       return;
@@ -385,7 +393,7 @@ class Upsync {
       final digest = await sha256.bind(tempFile.openRead()).first;
       final expected = manifest.sha256!.trim().toLowerCase();
       if (digest.toString().toLowerCase() != expected) {
-        await tempFile.delete().catchError((_) {});
+        await _deleteSilently(tempFile);
         throw const FormatException(
             'El paquete descargado no coincide con el SHA-256 esperado.');
       }
@@ -608,7 +616,7 @@ class Upsync {
       }
     } catch (_) {}
 
-    await file.delete().catchError((_) {});
+    await _deleteSilently(file);
   }
 
   String _pendingMetadataPath(_UpsyncPlatformPaths paths) {
@@ -617,6 +625,12 @@ class Upsync {
 
   String _normalizeFolderName(String value) {
     return value.replaceAll(RegExp(r'[^a-zA-Z0-9._-]+'), '_');
+  }
+
+  Future<void> _deleteSilently(FileSystemEntity entity) async {
+    try {
+      await entity.delete();
+    } catch (_) {}
   }
 
   void _emit(UpsyncState value) {
