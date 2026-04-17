@@ -1,0 +1,78 @@
+name: CI de upsync
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: upsync-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validar-plugin:
+    name: Validar upsync
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Habilitar escritorio en Windows
+        run: flutter config --enable-windows-desktop
+
+      - name: Mostrar entorno de Flutter
+        run: flutter doctor -v
+
+      - name: Instalar dependencias del plugin
+        run: flutter pub get
+
+      - name: Analizar plugin
+        run: flutter analyze
+
+      - name: Ejecutar pruebas del plugin
+        run: flutter test
+
+      - name: Instalar dependencias del ejemplo
+        working-directory: example
+        run: flutter pub get
+
+      - name: Analizar ejemplo
+        working-directory: example
+        run: flutter analyze
+
+      - name: Ejecutar pruebas widget del ejemplo
+        working-directory: example
+        run: flutter test test
+
+      - name: Ejecutar pruebas de integración del ejemplo
+        working-directory: example
+        run: flutter test integration_test
+
+      - name: Compilar ejemplo de escritorio
+        working-directory: example
+        run: flutter build windows --debug
+
+      - name: Compilar pruebas nativas
+        working-directory: example
+        run: cmake --build build/windows/x64 --config Debug --target upsync_test
+
+      - name: Ejecutar pruebas nativas
+        working-directory: example
+        run: ctest --test-dir build/windows/x64 -C Debug --output-on-failure
