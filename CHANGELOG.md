@@ -1,3 +1,7 @@
+## 0.1.0
+
+* Soporte para actualizar desde Microsoft Store.
+
 ## 0.0.1
 
 * Primer release de `upsync` para Windows.

@@ -7,8 +7,14 @@
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
 #include <flutter/standard_method_codec.h>
+#include <appmodel.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <windows.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Services.Store.h>
+#include <winrt/base.h>
 
 #include <filesystem>
 #include <fstream>
@@ -18,6 +24,12 @@
 #include <vector>
 
 namespace {
+
+using PluginResult =
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>;
+using winrt::Windows::Services::Store::StoreContext;
+using winrt::Windows::Services::Store::StorePackageUpdateResult;
+using winrt::Windows::Services::Store::StorePackageUpdateState;
 
 std::wstring Utf8ToWide(const std::string& input) {
   if (input.empty()) {
@@ -54,6 +66,124 @@ std::string WideToUtf8(const std::wstring& input) {
                       static_cast<int>(input.size()), output.data(),
                       size_needed, nullptr, nullptr);
   return output;
+}
+
+void EnsureWinrtApartment() {
+  static thread_local bool initialized = false;
+  if (initialized) {
+    return;
+  }
+
+  try {
+    winrt::init_apartment(winrt::apartment_type::single_threaded);
+    initialized = true;
+  } catch (...) {
+    initialized = true;
+  }
+}
+
+bool HasPackageIdentity() {
+  UINT32 length = 0;
+  const LONG result = GetCurrentPackageFullName(&length, nullptr);
+  return result == ERROR_INSUFFICIENT_BUFFER || result == ERROR_SUCCESS;
+}
+
+bool InitializeStoreContextWindow(const StoreContext& context, HWND hwnd) {
+  if (hwnd == nullptr) {
+    return false;
+  }
+
+  try {
+    auto initialize_with_window = context.as<IInitializeWithWindow>();
+    return SUCCEEDED(initialize_with_window->Initialize(hwnd));
+  } catch (...) {
+    return false;
+  }
+}
+
+std::string HResultToHex(winrt::hresult code) {
+  std::stringstream stream;
+  stream << "0x" << std::hex << std::uppercase
+         << static_cast<uint32_t>(code);
+  return stream.str();
+}
+
+std::string StorePackageUpdateStateToString(
+    StorePackageUpdateState state) {
+  switch (state) {
+    case StorePackageUpdateState::Pending:
+      return "pending";
+    case StorePackageUpdateState::Downloading:
+      return "downloading";
+    case StorePackageUpdateState::Deploying:
+      return "deploying";
+    case StorePackageUpdateState::Completed:
+      return "completed";
+    case StorePackageUpdateState::Canceled:
+      return "canceled";
+    case StorePackageUpdateState::OtherError:
+      return "otherError";
+    case StorePackageUpdateState::ErrorLowBattery:
+      return "errorLowBattery";
+    case StorePackageUpdateState::ErrorWiFiRecommended:
+      return "errorWiFiRecommended";
+    case StorePackageUpdateState::ErrorWiFiRequired:
+      return "errorWiFiRequired";
+  }
+
+  return "unknown";
+}
+
+flutter::EncodableMap MicrosoftStoreBaseResult() {
+  flutter::EncodableMap result;
+  result[flutter::EncodableValue("isPackaged")] =
+      flutter::EncodableValue(true);
+  result[flutter::EncodableValue("updateAvailable")] =
+      flutter::EncodableValue(false);
+  result[flutter::EncodableValue("updateCount")] =
+      flutter::EncodableValue(0);
+  result[flutter::EncodableValue("installRequested")] =
+      flutter::EncodableValue(false);
+  result[flutter::EncodableValue("installCompleted")] =
+      flutter::EncodableValue(false);
+  result[flutter::EncodableValue("status")] =
+      flutter::EncodableValue("upToDate");
+  return result;
+}
+
+flutter::EncodableMap MicrosoftStoreNotPackagedResult() {
+  auto result = MicrosoftStoreBaseResult();
+  result[flutter::EncodableValue("isPackaged")] =
+      flutter::EncodableValue(false);
+  result[flutter::EncodableValue("status")] =
+      flutter::EncodableValue("notPackaged");
+  return result;
+}
+
+flutter::EncodableMap MicrosoftStoreUpdateAvailableResult(
+    uint32_t update_count) {
+  auto result = MicrosoftStoreBaseResult();
+  result[flutter::EncodableValue("updateAvailable")] =
+      flutter::EncodableValue(true);
+  result[flutter::EncodableValue("updateCount")] =
+      flutter::EncodableValue(static_cast<int32_t>(update_count));
+  result[flutter::EncodableValue("status")] =
+      flutter::EncodableValue("updateAvailable");
+  return result;
+}
+
+flutter::EncodableMap MicrosoftStoreInstallResult(
+    uint32_t update_count,
+    const StorePackageUpdateResult& update_result) {
+  const StorePackageUpdateState state = update_result.OverallState();
+  auto result = MicrosoftStoreUpdateAvailableResult(update_count);
+  result[flutter::EncodableValue("installRequested")] =
+      flutter::EncodableValue(true);
+  result[flutter::EncodableValue("installCompleted")] =
+      flutter::EncodableValue(state == StorePackageUpdateState::Completed);
+  result[flutter::EncodableValue("status")] =
+      flutter::EncodableValue(StorePackageUpdateStateToString(state));
+  return result;
 }
 
 std::wstring GetCurrentExecutablePath() {
@@ -334,6 +464,79 @@ flutter::EncodableMap GetPaths(const std::string& app_name_utf8) {
   return result;
 }
 
+winrt::fire_and_forget CheckMicrosoftStoreUpdatesAsync(
+    HWND owner_window,
+    bool install,
+    PluginResult result) {
+  EnsureWinrtApartment();
+  winrt::apartment_context ui_thread;
+  std::string error_code;
+  std::string error_message;
+  std::string error_details;
+
+  try {
+    if (!HasPackageIdentity()) {
+      co_await ui_thread;
+      result->Success(
+          flutter::EncodableValue(MicrosoftStoreNotPackagedResult()));
+      co_return;
+    }
+
+    StoreContext context = StoreContext::GetDefault();
+    InitializeStoreContextWindow(context, owner_window);
+
+    const auto updates =
+        co_await context.GetAppAndOptionalStorePackageUpdatesAsync();
+    co_await ui_thread;
+    const uint32_t update_count = updates.Size();
+
+    if (update_count == 0) {
+      result->Success(flutter::EncodableValue(MicrosoftStoreBaseResult()));
+      co_return;
+    }
+
+    if (!install) {
+      result->Success(flutter::EncodableValue(
+          MicrosoftStoreUpdateAvailableResult(update_count)));
+      co_return;
+    }
+
+    if (!InitializeStoreContextWindow(context, owner_window)) {
+      result->Error(
+          "microsoft_store_window_unavailable",
+          "Microsoft Store could not be associated with the app window.");
+      co_return;
+    }
+
+    auto operation =
+        context.RequestDownloadAndInstallStorePackageUpdatesAsync(updates);
+    const StorePackageUpdateResult update_result = co_await operation;
+
+    co_await ui_thread;
+    result->Success(flutter::EncodableValue(
+        MicrosoftStoreInstallResult(update_count, update_result)));
+    co_return;
+  } catch (const winrt::hresult_error& error) {
+    error_code = "microsoft_store_update_failed";
+    error_message = WideToUtf8(std::wstring(error.message().c_str()));
+    error_details = HResultToHex(error.code());
+  } catch (const std::exception& error) {
+    error_code = "microsoft_store_update_failed";
+    error_message = error.what();
+  } catch (...) {
+    error_code = "microsoft_store_update_failed";
+    error_message = "Microsoft Store update failed.";
+  }
+
+  co_await ui_thread;
+  if (error_details.empty()) {
+    result->Error(error_code, error_message);
+  } else {
+    result->Error(error_code, error_message,
+                  flutter::EncodableValue(error_details));
+  }
+}
+
 }  // namespace
 
 void UpsyncPlugin::RegisterWithRegistrar(
@@ -342,7 +545,12 @@ void UpsyncPlugin::RegisterWithRegistrar(
       registrar->messenger(), "upsync/methods",
       &flutter::StandardMethodCodec::GetInstance());
 
-  auto plugin = std::make_unique<UpsyncPlugin>();
+  HWND owner_window = nullptr;
+  if (registrar->GetView() != nullptr) {
+    owner_window = registrar->GetView()->GetNativeWindow();
+  }
+
+  auto plugin = std::make_unique<UpsyncPlugin>(owner_window);
   channel->SetMethodCallHandler(
       [plugin_pointer = plugin.get()](const auto& call, auto result) {
         plugin_pointer->HandleMethodCall(call, std::move(result));
@@ -351,7 +559,7 @@ void UpsyncPlugin::RegisterWithRegistrar(
   registrar->AddPlugin(std::move(plugin));
 }
 
-UpsyncPlugin::UpsyncPlugin() {}
+UpsyncPlugin::UpsyncPlugin(HWND owner_window) : owner_window_(owner_window) {}
 
 UpsyncPlugin::~UpsyncPlugin() {}
 
@@ -397,6 +605,24 @@ void UpsyncPlugin::HandleMethodCall(
         Utf8ToWide(std::get<std::string>(path_it->second));
     result->Success(
         flutter::EncodableValue(ApplyUpdateAndRestart(downloaded_package_path)));
+    return;
+  }
+
+  if (method == "checkMicrosoftStoreUpdates") {
+    const auto* arguments =
+        std::get_if<flutter::EncodableMap>(method_call.arguments());
+
+    bool install = false;
+    if (arguments != nullptr) {
+      const auto install_it =
+          arguments->find(flutter::EncodableValue("install"));
+      if (install_it != arguments->end() &&
+          std::holds_alternative<bool>(install_it->second)) {
+        install = std::get<bool>(install_it->second);
+      }
+    }
+
+    CheckMicrosoftStoreUpdatesAsync(owner_window_, install, std::move(result));
     return;
   }
 

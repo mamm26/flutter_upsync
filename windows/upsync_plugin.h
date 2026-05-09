@@ -3,6 +3,7 @@
 
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
+#include <windows.h>
 
 #include <memory>
 
@@ -10,7 +11,7 @@ class UpsyncPlugin : public flutter::Plugin {
  public:
   static void RegisterWithRegistrar(flutter::PluginRegistrarWindows* registrar);
 
-  UpsyncPlugin();
+  explicit UpsyncPlugin(HWND owner_window = nullptr);
   ~UpsyncPlugin() override;
 
   UpsyncPlugin(const UpsyncPlugin&) = delete;
@@ -19,6 +20,9 @@ class UpsyncPlugin : public flutter::Plugin {
   void HandleMethodCall(
       const flutter::MethodCall<flutter::EncodableValue>& method_call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
+
+ private:
+  HWND owner_window_;
 };
 
 #endif  // FLUTTER_PLUGIN_UPSYNC_PLUGIN_H_

@@ -30,5 +30,17 @@ void main() {
       expect(updated.message, isNull);
       expect(updated.error, isNull);
     });
+
+    test('marca aplicable una actualización detectada por Microsoft Store', () {
+      const state = UpsyncState(
+        status: UpsyncStatus.updateAvailable,
+        updateSource: UpsyncUpdateSource.microsoftStore,
+        microsoftStoreUpdateCount: 1,
+      );
+
+      expect(state.canApplyUpdate, isTrue);
+      expect(state.isReadyToInstall, isFalse);
+      expect(state.showIndicator, isTrue);
+    });
   });
 }

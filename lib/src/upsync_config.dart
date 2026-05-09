@@ -1,3 +1,12 @@
+/// Origen usado para buscar actualizaciones en Windows.
+enum UpsyncUpdateSource {
+  /// Usa un manifest remoto propio y paquetes `.zip` o `.exe`.
+  manifest,
+
+  /// Usa la API oficial de Microsoft Store para la app instalada.
+  microsoftStore,
+}
+
 /// Configuración del actualizador para Windows.
 class UpsyncConfig {
   /// Crea una configuración para consultar, descargar y aplicar actualizaciones.
@@ -10,7 +19,22 @@ class UpsyncConfig {
     this.requestHeaders = const {},
     this.autoDownload = true,
     this.requestTimeout = const Duration(seconds: 45),
+    this.updateSource = UpsyncUpdateSource.manifest,
+    this.installMicrosoftStoreUpdates = true,
   });
+
+  /// Crea una configuración que delega la actualización a Microsoft Store.
+  const UpsyncConfig.microsoftStore({
+    this.appName = '',
+    this.checkInterval = const Duration(minutes: 30),
+    this.installMicrosoftStoreUpdates = true,
+  })  : manifestUrl = '',
+        currentVersion = '',
+        currentBuildNumber = 0,
+        requestHeaders = const {},
+        autoDownload = false,
+        requestTimeout = const Duration(seconds: 45),
+        updateSource = UpsyncUpdateSource.microsoftStore;
 
   /// URL del manifest remoto.
   final String manifestUrl;
@@ -35,4 +59,14 @@ class UpsyncConfig {
 
   /// Tiempo máximo para completar cada solicitud HTTP.
   final Duration requestTimeout;
+
+  /// Canal usado para buscar y aplicar actualizaciones.
+  final UpsyncUpdateSource updateSource;
+
+  /// En modo Microsoft Store, solicita descargar e instalar si hay actualización.
+  final bool installMicrosoftStoreUpdates;
+
+  /// Indica si el flujo activo pertenece a Microsoft Store.
+  bool get usesMicrosoftStore =>
+      updateSource == UpsyncUpdateSource.microsoftStore;
 }

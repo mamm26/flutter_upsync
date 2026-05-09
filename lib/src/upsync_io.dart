@@ -19,8 +19,7 @@ class Upsync {
 
   /// Instancia singleton del actualizador.
   static final Upsync instance = Upsync._();
-  static const MethodChannel _channel =
-      MethodChannel('upsync/methods');
+  static const MethodChannel _channel = MethodChannel('upsync/methods');
 
   final StreamController<UpsyncState> _states =
       StreamController<UpsyncState>.broadcast();
@@ -49,15 +48,26 @@ class Upsync {
     if (!_isSupportedPlatform) {
       _emit(_state.copyWith(
         status: UpsyncStatus.disabled,
+        updateSource: config.updateSource,
         message: 'Actualizador Windows no disponible en esta plataforma.',
         clearError: true,
       ));
       return;
     }
 
+    if (config.usesMicrosoftStore) {
+      await checkNow();
+      _timer?.cancel();
+      _timer = Timer.periodic(_effectiveCheckInterval(config), (_) {
+        unawaited(checkNow());
+      });
+      return;
+    }
+
     if (config.manifestUrl.trim().isEmpty) {
       _emit(_state.copyWith(
         status: UpsyncStatus.disabled,
+        updateSource: config.updateSource,
         message: 'No se configuro la URL del manifiesto de Windows.',
         clearError: true,
       ));
@@ -72,7 +82,7 @@ class Upsync {
     }
 
     _timer?.cancel();
-    _timer = Timer.periodic(config.checkInterval, (_) {
+    _timer = Timer.periodic(_effectiveCheckInterval(config), (_) {
       unawaited(checkNow());
     });
   }
@@ -88,6 +98,7 @@ class Upsync {
     if (!_isSupportedPlatform) {
       return _state.copyWith(
         status: UpsyncStatus.disabled,
+        updateSource: _config?.updateSource ?? _state.updateSource,
         message: 'Actualizador Windows no disponible en esta plataforma.',
       );
     }
@@ -105,6 +116,11 @@ class Upsync {
 
   /// Intenta aplicar el paquete descargado y reiniciar la aplicación.
   Future<bool> applyDownloadedUpdateAndRestart() async {
+    final config = _config;
+    if (config?.usesMicrosoftStore ?? false) {
+      return _requestMicrosoftStoreInstall();
+    }
+
     if (!_isSupportedPlatform || !_state.isReadyToInstall) {
       return false;
     }
@@ -161,6 +177,23 @@ class Upsync {
       return;
     }
 
+    if (config.usesMicrosoftStore) {
+      _emit(_state.copyWith(
+        status: UpsyncStatus.idle,
+        updateSource: UpsyncUpdateSource.microsoftStore,
+        clearManifest: true,
+        clearDownloadedFilePath: true,
+        clearProgress: true,
+        clearError: true,
+        message: 'Microsoft Store no usa descargas pendientes locales.',
+        microsoftStoreUpdateCount: 0,
+        microsoftStoreInstallRequested: false,
+        microsoftStoreInstallCompleted: false,
+        clearMicrosoftStoreResult: true,
+      ));
+      return;
+    }
+
     final paths = _paths ?? await _resolvePaths(config);
     await _clearPendingMetadata(paths, deleteDownloadedFile: true);
     _emit(_state.copyWith(
@@ -179,10 +212,13 @@ class Upsync {
       throw StateError('Debes llamar start() antes de checkNow().');
     }
 
+    if (config.usesMicrosoftStore) {
+      return _checkMicrosoftStoreNow(config);
+    }
+
     final paths = _paths ??= await _resolvePaths(config);
 
-    if (!_state.isReadyToInstall &&
-        _state.status != UpsyncStatus.downloading) {
+    if (!_state.isReadyToInstall && _state.status != UpsyncStatus.downloading) {
       _emit(_state.copyWith(
         status: UpsyncStatus.checking,
         lastCheckedAt: DateTime.now(),
@@ -254,8 +290,206 @@ class Upsync {
     }
   }
 
-  Future<UpsyncManifest> _fetchManifest(
-      UpsyncConfig config) async {
+  Future<UpsyncState> _checkMicrosoftStoreNow(UpsyncConfig config) async {
+    _emit(_state.copyWith(
+      status: UpsyncStatus.checking,
+      updateSource: UpsyncUpdateSource.microsoftStore,
+      lastCheckedAt: DateTime.now(),
+      clearManifest: true,
+      clearDownloadedFilePath: true,
+      clearProgress: true,
+      clearError: true,
+      clearMessage: true,
+      microsoftStoreUpdateCount: 0,
+      microsoftStoreInstallRequested: false,
+      microsoftStoreInstallCompleted: false,
+      clearMicrosoftStoreResult: true,
+    ));
+
+    try {
+      final result = await _invokeMicrosoftStoreUpdate(
+        install: config.installMicrosoftStoreUpdates,
+      );
+      _emit(_stateFromMicrosoftStoreResult(result));
+      return _state;
+    } catch (e) {
+      _emit(_state.copyWith(
+        status: UpsyncStatus.error,
+        updateSource: UpsyncUpdateSource.microsoftStore,
+        error: e.toString(),
+        lastCheckedAt: DateTime.now(),
+        clearMessage: true,
+      ));
+      return _state;
+    }
+  }
+
+  Future<bool> _requestMicrosoftStoreInstall() async {
+    if (!_isSupportedPlatform) {
+      return false;
+    }
+
+    final config = _config;
+    if (config == null || !config.usesMicrosoftStore) {
+      return false;
+    }
+
+    _emit(_state.copyWith(
+      status: UpsyncStatus.applying,
+      updateSource: UpsyncUpdateSource.microsoftStore,
+      clearError: true,
+      message: 'Solicitando actualización desde Microsoft Store...',
+      microsoftStoreInstallRequested: true,
+      microsoftStoreInstallCompleted: false,
+      clearMicrosoftStoreResult: true,
+    ));
+
+    try {
+      final result = await _invokeMicrosoftStoreUpdate(install: true);
+      _emit(_stateFromMicrosoftStoreResult(result));
+      return _state.microsoftStoreInstallCompleted;
+    } catch (e) {
+      _emit(_state.copyWith(
+        status: UpsyncStatus.error,
+        updateSource: UpsyncUpdateSource.microsoftStore,
+        error: e.toString(),
+        lastCheckedAt: DateTime.now(),
+        clearMessage: true,
+      ));
+      return false;
+    }
+  }
+
+  Future<Map<String, dynamic>> _invokeMicrosoftStoreUpdate({
+    required bool install,
+  }) async {
+    final result = await _channel.invokeMapMethod<String, dynamic>(
+      'checkMicrosoftStoreUpdates',
+      <String, Object?>{'install': install},
+    );
+
+    if (result == null) {
+      throw StateError('Microsoft Store no devolvió un resultado válido.');
+    }
+
+    return result;
+  }
+
+  UpsyncState _stateFromMicrosoftStoreResult(
+    Map<String, dynamic> result,
+  ) {
+    final isPackaged = _boolValue(result, 'isPackaged');
+    final updateAvailable = _boolValue(result, 'updateAvailable');
+    final installRequested = _boolValue(result, 'installRequested');
+    final installCompleted = _boolValue(result, 'installCompleted');
+    final updateCount = _intValue(result, 'updateCount');
+    final storeResult = _stringValue(result, 'status');
+    final message = _stringValue(result, 'message');
+
+    if (!isPackaged) {
+      return _state.copyWith(
+        status: UpsyncStatus.disabled,
+        updateSource: UpsyncUpdateSource.microsoftStore,
+        lastCheckedAt: DateTime.now(),
+        message: message ??
+            'La comprobación de Microsoft Store requiere una app instalada con identidad de paquete.',
+        clearManifest: true,
+        clearDownloadedFilePath: true,
+        clearProgress: true,
+        clearError: true,
+        microsoftStoreUpdateCount: 0,
+        microsoftStoreInstallRequested: false,
+        microsoftStoreInstallCompleted: false,
+        microsoftStoreResult: storeResult,
+      );
+    }
+
+    if (!updateAvailable) {
+      return _state.copyWith(
+        status: UpsyncStatus.upToDate,
+        updateSource: UpsyncUpdateSource.microsoftStore,
+        lastCheckedAt: DateTime.now(),
+        message: message ??
+            'Microsoft Store no informó actualizaciones disponibles.',
+        clearManifest: true,
+        clearDownloadedFilePath: true,
+        clearProgress: true,
+        clearError: true,
+        microsoftStoreUpdateCount: 0,
+        microsoftStoreInstallRequested: false,
+        microsoftStoreInstallCompleted: false,
+        microsoftStoreResult: storeResult,
+      );
+    }
+
+    if (!installRequested) {
+      return _state.copyWith(
+        status: UpsyncStatus.updateAvailable,
+        updateSource: UpsyncUpdateSource.microsoftStore,
+        lastCheckedAt: DateTime.now(),
+        message:
+            message ?? 'Microsoft Store informó una actualización disponible.',
+        clearManifest: true,
+        clearDownloadedFilePath: true,
+        clearProgress: true,
+        clearError: true,
+        microsoftStoreUpdateCount: updateCount,
+        microsoftStoreInstallRequested: false,
+        microsoftStoreInstallCompleted: false,
+        microsoftStoreResult: storeResult,
+      );
+    }
+
+    if (installCompleted) {
+      return _state.copyWith(
+        status: UpsyncStatus.upToDate,
+        updateSource: UpsyncUpdateSource.microsoftStore,
+        progress: 1.0,
+        lastCheckedAt: DateTime.now(),
+        message: message ?? 'Microsoft Store completó la actualización.',
+        clearManifest: true,
+        clearDownloadedFilePath: true,
+        clearError: true,
+        microsoftStoreUpdateCount: updateCount,
+        microsoftStoreInstallRequested: true,
+        microsoftStoreInstallCompleted: true,
+        microsoftStoreResult: storeResult,
+      );
+    }
+
+    if (storeResult == 'canceled') {
+      return _state.copyWith(
+        status: UpsyncStatus.updateAvailable,
+        updateSource: UpsyncUpdateSource.microsoftStore,
+        lastCheckedAt: DateTime.now(),
+        message: message ??
+            'La actualización de Microsoft Store fue cancelada por el usuario.',
+        clearManifest: true,
+        clearDownloadedFilePath: true,
+        clearProgress: true,
+        clearError: true,
+        microsoftStoreUpdateCount: updateCount,
+        microsoftStoreInstallRequested: true,
+        microsoftStoreInstallCompleted: false,
+        microsoftStoreResult: storeResult,
+      );
+    }
+
+    return _state.copyWith(
+      status: UpsyncStatus.error,
+      updateSource: UpsyncUpdateSource.microsoftStore,
+      lastCheckedAt: DateTime.now(),
+      error: message ??
+          'Microsoft Store no pudo completar la actualización ($storeResult).',
+      clearMessage: true,
+      microsoftStoreUpdateCount: updateCount,
+      microsoftStoreInstallRequested: true,
+      microsoftStoreInstallCompleted: false,
+      microsoftStoreResult: storeResult,
+    );
+  }
+
+  Future<UpsyncManifest> _fetchManifest(UpsyncConfig config) async {
     final manifestUri = Uri.parse(config.manifestUrl.trim());
     if (manifestUri.scheme == 'data') {
       final uriData = manifestUri.data;
@@ -353,8 +587,7 @@ class Upsync {
 
     final request = http.Request('GET', Uri.parse(manifest.downloadUrl));
     request.headers.addAll(config.requestHeaders);
-    final response =
-        await _client.send(request).timeout(config.requestTimeout);
+    final response = await _client.send(request).timeout(config.requestTimeout);
 
     if (response.statusCode != 200) {
       throw HttpException(
@@ -496,8 +729,7 @@ class Upsync {
     return File(fullPath);
   }
 
-  Future<_UpsyncPlatformPaths> _resolvePaths(
-      UpsyncConfig config) async {
+  Future<_UpsyncPlatformPaths> _resolvePaths(UpsyncConfig config) async {
     final values = await _channel.invokeMapMethod<String, dynamic>(
       'getPaths',
       <String, Object?>{'appName': config.appName.trim()},
@@ -551,14 +783,25 @@ class Upsync {
       return manifest.buildNumber > config.currentBuildNumber;
     }
 
-    return _compareSemanticVersions(manifest.version, config.currentVersion) > 0;
+    return _compareSemanticVersions(manifest.version, config.currentVersion) >
+        0;
+  }
+
+  Duration _effectiveCheckInterval(UpsyncConfig config) {
+    if (config.usesMicrosoftStore &&
+        config.checkInterval < const Duration(minutes: 30)) {
+      return const Duration(minutes: 30);
+    }
+
+    return config.checkInterval;
   }
 
   int _compareSemanticVersions(String left, String right) {
     final leftParts = _versionParts(left);
     final rightParts = _versionParts(right);
-    final maxLength =
-        leftParts.length > rightParts.length ? leftParts.length : rightParts.length;
+    final maxLength = leftParts.length > rightParts.length
+        ? leftParts.length
+        : rightParts.length;
 
     for (var i = 0; i < maxLength; i++) {
       final a = i < leftParts.length ? leftParts[i] : 0;
@@ -625,6 +868,28 @@ class Upsync {
 
   String _normalizeFolderName(String value) {
     return value.replaceAll(RegExp(r'[^a-zA-Z0-9._-]+'), '_');
+  }
+
+  bool _boolValue(Map<String, dynamic> json, String key) {
+    return json[key] == true;
+  }
+
+  int _intValue(Map<String, dynamic> json, String key) {
+    final value = json[key];
+    if (value is int) {
+      return value;
+    }
+
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  String? _stringValue(Map<String, dynamic> json, String key) {
+    final value = json[key]?.toString().trim();
+    if (value == null || value.isEmpty) {
+      return null;
+    }
+
+    return value;
   }
 
   Future<void> _deleteSilently(FileSystemEntity entity) async {

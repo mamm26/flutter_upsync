@@ -1,11 +1,7 @@
 # upsync
 
-## Menu / Menú
+[English](#english) | [Español](#español)
 
-- [English](#english)
-- [Español](#espanol)
-
-<a id="english"></a>
 ## English
 
 `upsync` is a Flutter plugin for Windows that keeps a desktop application up to
@@ -27,6 +23,7 @@ The plugin currently supports:
 - Windows only;
 - full release `.zip` packages;
 - `.exe` packages;
+- Microsoft Store update checks for packaged Store/MSIX apps;
 - `sha256` validation when provided by the manifest;
 - automatic periodic checks;
 - restoration of a pending download when the app is opened again.
@@ -39,7 +36,7 @@ From pub.dev:
 
 ```yaml
 dependencies:
-  upsync: ^0.0.1+2
+  upsync: ^0.1.0
 ```
 
 Or directly from GitHub:
@@ -98,12 +95,16 @@ Available parameters:
 - `requestHeaders`
 - `autoDownload`
 - `requestTimeout`
+- `updateSource`
+- `installMicrosoftStoreUpdates`
 
 Default values:
 
 - `checkInterval`: 30 minutes
 - `autoDownload`: `true`
 - `requestTimeout`: 45 seconds
+- `updateSource`: `UpsyncUpdateSource.manifest`
+- `installMicrosoftStoreUpdates`: `true`
 
 ### 5. Start the plugin
 
@@ -174,6 +175,7 @@ Useful helpers:
 
 ```dart
 final ready = Upsync.instance.state.isReadyToInstall;
+final canApply = Upsync.instance.state.canApplyUpdate;
 final showIndicator = Upsync.instance.state.showIndicator;
 ```
 
@@ -300,12 +302,54 @@ If you do not provide `appName`, `<app>` is derived from the `.exe` name.
 
 - `manifestUrl` cannot be empty.
 - `autoDownload` is enabled by default.
+- if `updateSource` is `UpsyncUpdateSource.microsoftStore`, `manifestUrl`,
+  `currentVersion`, `currentBuildNumber`, `requestHeaders`, `autoDownload`,
+  `requestTimeout`, local downloads, `sha256`, and the ZIP/EXE helper are not
+  used. Microsoft Store owns the update download and installation.
+- Microsoft Store checks only work when the app is running with package
+  identity, such as a Store/MSIX install.
+- Microsoft Store limits update detection frequency. `upsync` keeps the
+  periodic interval at 30 minutes or more in that mode.
 - if there is already a valid download for a newer version, `start()` restores
   it without downloading again.
 - if the manifest includes `sha256`, the file is validated before it is marked
   as ready.
 - the current public API does not expose a separate manual download method
   after setting `autoDownload: false`.
+
+## Microsoft Store Updates
+
+Use this mode when the Windows app is distributed through Microsoft Store or as
+an MSIX package associated with Microsoft Store:
+
+```dart
+await Upsync.instance.start(
+  const UpsyncConfig.microsoftStore(),
+);
+```
+
+By default, if Microsoft Store reports an update, `upsync` asks the official
+Store API to download and install it. The operating system may show Store
+dialogs asking the user to continue. If you only want to detect the update,
+disable automatic Store installation:
+
+```dart
+await Upsync.instance.start(
+  const UpsyncConfig.microsoftStore(
+    installMicrosoftStoreUpdates: false,
+  ),
+);
+```
+
+When `installMicrosoftStoreUpdates` is `false`, `checkNow()` can move the state
+to `UpsyncStatus.updateAvailable`. You can then call:
+
+```dart
+await Upsync.instance.applyDownloadedUpdateAndRestart();
+```
+
+In Microsoft Store mode this method delegates to Store installation instead of
+using a locally downloaded ZIP or EXE.
 
 ## Minimal Example
 
@@ -360,7 +404,6 @@ class _MyAppState extends State<MyApp> {
 }
 ```
 
-<a id="espanol"></a>
 ## Español
 
 `upsync` es un plugin de Flutter para Windows que mantiene actualizada una
@@ -382,6 +425,7 @@ Hoy el plugin soporta:
 - Windows solamente;
 - paquetes `.zip` con el release completo;
 - paquetes `.exe`;
+- comprobación de actualizaciones con Microsoft Store para apps Store/MSIX;
 - validación `sha256` si el manifest la trae;
 - comprobación automática periódica;
 - restauración de una descarga pendiente si la app se vuelve a abrir.
@@ -394,7 +438,7 @@ Desde pub.dev:
 
 ```yaml
 dependencies:
-  upsync: ^0.0.1+2
+  upsync: ^0.1.0
 ```
 
 O directamente desde GitHub:
@@ -453,12 +497,16 @@ Parámetros disponibles:
 - `requestHeaders`
 - `autoDownload`
 - `requestTimeout`
+- `updateSource`
+- `installMicrosoftStoreUpdates`
 
 Valores por defecto:
 
 - `checkInterval`: 30 minutos
 - `autoDownload`: `true`
 - `requestTimeout`: 45 segundos
+- `updateSource`: `UpsyncUpdateSource.manifest`
+- `installMicrosoftStoreUpdates`: `true`
 
 ### 5. Inicia el plugin
 
@@ -529,6 +577,7 @@ Helpers útiles:
 
 ```dart
 final ready = Upsync.instance.state.isReadyToInstall;
+final canApply = Upsync.instance.state.canApplyUpdate;
 final showIndicator = Upsync.instance.state.showIndicator;
 ```
 
@@ -655,12 +704,54 @@ Si no envías `appName`, `<app>` sale del nombre del `.exe`.
 
 - `manifestUrl` no puede ir vacío.
 - `autoDownload` viene activado por defecto.
+- si `updateSource` es `UpsyncUpdateSource.microsoftStore`, `manifestUrl`,
+  `currentVersion`, `currentBuildNumber`, `requestHeaders`, `autoDownload`,
+  `requestTimeout`, las descargas locales, `sha256` y el helper ZIP/EXE no se
+  usan. Microsoft Store controla la descarga y la instalación.
+- la comprobación de Microsoft Store solo funciona cuando la app corre con
+  identidad de paquete, por ejemplo desde Store/MSIX.
+- Microsoft Store limita la frecuencia de detección. En ese modo `upsync`
+  mantiene el intervalo periódico en 30 minutos o más.
 - si ya había una descarga válida de una versión más nueva, `start()` la
   recupera sin volver a descargar.
 - si el manifest trae `sha256`, el archivo se valida antes de marcarse como
   listo.
 - hoy la API pública no expone un método aparte para descargar manualmente
   después de marcar `autoDownload: false`.
+
+## Actualizaciones con Microsoft Store
+
+Usa este modo cuando la app de Windows se distribuye por Microsoft Store o como
+un paquete MSIX asociado a Microsoft Store:
+
+```dart
+await Upsync.instance.start(
+  const UpsyncConfig.microsoftStore(),
+);
+```
+
+Por defecto, si Microsoft Store informa una actualización, `upsync` pide a la
+API oficial de Store que la descargue e instale. El sistema operativo puede
+mostrar diálogos de Store para pedir permiso al usuario. Si solo quieres
+detectar la actualización, desactiva la instalación automática de Store:
+
+```dart
+await Upsync.instance.start(
+  const UpsyncConfig.microsoftStore(
+    installMicrosoftStoreUpdates: false,
+  ),
+);
+```
+
+Cuando `installMicrosoftStoreUpdates` es `false`, `checkNow()` puede mover el
+estado a `UpsyncStatus.updateAvailable`. Luego puedes llamar:
+
+```dart
+await Upsync.instance.applyDownloadedUpdateAndRestart();
+```
+
+En modo Microsoft Store este método delega la instalación a Store en lugar de
+usar un ZIP o EXE descargado localmente.
 
 ## Ejemplo mínimo
 
